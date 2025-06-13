@@ -8,6 +8,10 @@ use project_x::edit::patch::CodePatcher;
 use project_x::hooks::autotest::TestExecutor;
 use std::time::Duration;
 use tokio;
+use std::env;
+use tempfile::{tempdir, TempDir};
+use std::path::PathBuf;
+use fs_extra;
 
 #[derive(Parser)]
 #[clap(name = "project-x")]
@@ -44,6 +48,41 @@ struct Cli {
     /// Skip tests - apply changes without running test suite
     #[clap(long)]
     skip_tests: bool,
+
+    /// Run in a temporary sandbox directory to avoid modifying project files
+    #[clap(long)]
+    sandbox: bool,
+
+    /// If using --sandbox, keep the directory after completion for inspection
+    #[clap(long)]
+    keep_sandbox: bool,
+}
+
+struct Sandbox {
+    _temp_dir: TempDir,
+    path: PathBuf,
+}
+
+impl Sandbox {
+    fn new() -> Result<Self, Box<dyn Error>> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().to_path_buf();
+        println!("✨ Created sandbox directory at: {}", path.display());
+
+        let mut copy_options = fs_extra::dir::CopyOptions::new();
+        copy_options.copy_inside = true;
+        fs_extra::dir::copy(".", &path, &copy_options)?;
+        println!("🖨️  Copied project to sandbox.");
+
+        Ok(Sandbox {
+            _temp_dir: temp_dir,
+            path,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 #[tokio::main]
@@ -119,6 +158,35 @@ async fn run_autonomous_tdd_loop(
     cli: &Cli,
     gemini_client: &GeminiClient
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if cli.sandbox {
+        let sandbox = Sandbox::new()?;
+        let original_dir = env::current_dir()?;
+        env::set_current_dir(sandbox.path())?;
+
+        // Run the actual loop inside the sandbox
+        let result = run_loop_logic(user_prompt, cli, gemini_client).await;
+
+        // Return to original directory
+        env::set_current_dir(original_dir)?;
+
+        if cli.keep_sandbox {
+            println!("✅ Sandbox retained at: {}", sandbox.path().display());
+            // To prevent the TempDir from being dropped and deleting the directory
+            std::mem::forget(sandbox);
+        }
+        return result;
+    }
+
+    // If not in sandbox, run directly
+    run_loop_logic(user_prompt, cli, gemini_client).await
+}
+
+/// The core logic of the autonomous loop (refactored to be called from sandbox or directly)
+async fn run_loop_logic(
+    user_prompt: &str,
+    cli: &Cli,
+    gemini_client: &GeminiClient,
+) -> Result<(), Box<dyn Error>> {
     println!("🤖 AUTONOMOUS TDD LOOP ACTIVATED");
     println!("📝 User Request: \"{}\"", user_prompt);
     println!("🔧 Max Retries: {}", cli.max_retries);
