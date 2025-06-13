@@ -10,10 +10,11 @@ use std::time::Duration;
 use tokio;
 use std::env;
 use tempfile::{tempdir, TempDir};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use fs_extra;
 use std::process::Command;
 use std::fs;
+use std::error::Error;
 
 #[derive(Parser)]
 #[clap(name = "project-x")]
