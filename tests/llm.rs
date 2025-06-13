@@ -5,9 +5,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_gemini_client_requires_api_key() {
-    // Temporarily remove the environment variable if it exists
+    // Temporarily remove relevant environment variables if they exist
     let original_var = std::env::var("GEMINI_API_KEY").ok();
+    let original_openrouter = std::env::var("OPENROUTER_API_KEY").ok();
     std::env::remove_var("GEMINI_API_KEY");
+    std::env::remove_var("OPENROUTER_API_KEY");
     
     let result = GeminiClient::new();
     assert!(result.is_err());
@@ -16,6 +18,9 @@ async fn test_gemini_client_requires_api_key() {
     // Restore the original environment variable if it existed
     if let Some(key) = original_var {
         std::env::set_var("GEMINI_API_KEY", key);
+    }
+    if let Some(key) = original_openrouter {
+        std::env::set_var("OPENROUTER_API_KEY", key);
     }
 }
 
