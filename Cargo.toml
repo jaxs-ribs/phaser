@@ -6,9 +6,25 @@ description = "AI-First Coding Assistant (Rust Edition)"
 authors = ["Your Name <your.email@example.com>"]
 
 [dependencies]
-cpal = "0.15"
-hound = "3.5"
+hound = "3.4"
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+clap = { version = "3.2", features = ["derive"] }
+tree-sitter = "0.20"
+sha2 = "0.10"
+uuid = { version = "1.0", features = ["v4"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.5"
+wiremock = "0.5"
 
 [[bin]]
 name = "project-x"
 path = "src/main.rs"
+
+[[bin]]
+name = "indexer"
+path = "src/bin/indexer.rs"
