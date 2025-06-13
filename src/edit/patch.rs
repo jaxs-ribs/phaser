@@ -52,62 +52,74 @@ impl CodePatcher {
         temp_file.write_all(diff_content.as_bytes())?;
         let temp_path = temp_file.path();
         
-        // Build patch command
-        let mut cmd = Command::new("patch");
-        cmd.arg("-p1"); // Remove one level of path prefix
-        cmd.arg("--unified"); // Expect unified diff format
-        cmd.arg("--input").arg(temp_path);
-        
-        if self.dry_run {
-            cmd.arg("--dry-run");
+        // Strategy list: each entry is (strip_level, fuzz_level)
+        let strategies = vec![
+            (1, None),            // -p1, exact
+            (1, Some(3)),         // -p1, fuzz 3
+            (0, Some(3)),         // -p0, fuzz 3
+        ];
+
+        let mut last_output = String::new();
+        let mut last_error = String::new();
+        let mut final_files: Vec<String> = Vec::new();
+        let mut success = false;
+
+        for (strip, fuzz_opt) in strategies {
+            // Build patch command for this strategy
+            let mut cmd = Command::new("patch");
+            cmd.arg(format!("-p{}", strip));
+            cmd.arg("--unified");
+            if let Some(fuzz) = fuzz_opt {
+                cmd.arg("--fuzz").arg(fuzz.to_string());
+            }
+            cmd.arg("--input").arg(&temp_path);
+            if self.dry_run {
+                cmd.arg("--dry-run");
+            }
+            if self.backup {
+                cmd.arg("--backup");
+            }
+
+            println!("🔧 Trying patch command: {:?}", cmd);
+            let output = cmd.output()?;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            last_output = format!("STDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
+            last_error = stderr.clone();
+            success = output.status.success();
+            final_files = self.parse_modified_files(&stdout);
+            if success {
+                println!("✅ Patch applied successfully with -p{} fuzz {:?}!", strip, fuzz_opt);
+                break;
+            } else {
+                println!("❌ Patch attempt failed with -p{} fuzz {:?}: {}", strip, fuzz_opt, stderr.lines().take(3).collect::<Vec<_>>().join(" | "));
+            }
         }
-        
-        if self.backup {
-            cmd.arg("--backup");
-        }
-        
-        // Add verbose output
-        cmd.arg("--verbose");
-        
-        println!("🔧 Running patch command: {:?}", cmd);
-        
-        // Execute patch command
-        let output = cmd.output()?;
-        
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let combined_output = format!("STDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
-        
-        let success = output.status.success();
-        
-        // Parse modified files from patch output
-        let files_modified = self.parse_modified_files(&stdout);
-        
+
         let result = PatchResult {
             success,
-            files_modified: files_modified.clone(),
-            output: combined_output.clone(),
-            error: if success { None } else { Some(stderr.to_string()) },
+            files_modified: final_files.clone(),
+            output: last_output.clone(),
+            error: if success { None } else { Some(last_error.clone()) },
         };
-        
-        if success {
-            println!("✅ Patch applied successfully!");
-            if !files_modified.is_empty() {
+
+        if !success {
+            println!("❌ Patch failed after trying all strategies!");
+            println!("Error output: {}", last_error);
+        } else {
+            if !final_files.is_empty() {
                 println!("📝 Modified files:");
-                for file in &files_modified {
-                    println!("  • {}", file);
+                for f in &final_files {
+                    println!("  • {}", f);
                 }
             }
-        } else {
-            println!("❌ Patch failed!");
-            println!("Error output: {}", stderr);
         }
-        
+
         if self.dry_run {
             println!("🏃 DRY RUN - No actual changes were made");
         }
-        
-        Ok(result)
+
+        return Ok(result);
     }
     
     /// Parse the list of modified files from patch output

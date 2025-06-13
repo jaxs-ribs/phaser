@@ -4,6 +4,7 @@ use std::env;
 use std::error::Error;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use serde_json::json;
 
 #[derive(Serialize)]
 struct GeminiRequest {
@@ -43,8 +44,11 @@ struct ResponsePart {
 #[derive(Debug)]
 pub struct GeminiClient {
     client: Client,
-    api_key: String,
+    api_key: Option<String>,
     base_url: String,
+    use_openrouter: bool,
+    openrouter_key: Option<String>,
+    openrouter_model: String,
     request_count: Arc<AtomicU32>,
     max_requests_per_session: u32,
     max_prompt_length: usize,
@@ -54,11 +58,14 @@ impl GeminiClient {
     /// Initialize the GeminiClient with API key from GEMINI_API_KEY environment variable
     /// Includes built-in spending protection limits
     pub fn new() -> Result<Self, Box<dyn Error>> {
-        let api_key = env::var("GEMINI_API_KEY")
-            .map_err(|_| "GEMINI_API_KEY environment variable not set")?;
+        let api_key = env::var("GEMINI_API_KEY").ok();
 
         let client = Client::new();
-        let base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent".to_string();
+
+        // Allow model override via env, default to Gemini 2.5 Pro
+        let model_name = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-pro".to_string());
+
+        let base_url = format!("https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent", model_name);
 
         // Spending protection: Limit requests per session and prompt length
         let max_requests_per_session = env::var("GEMINI_MAX_REQUESTS")
@@ -71,10 +78,18 @@ impl GeminiClient {
             .parse::<usize>()
             .unwrap_or(2000);
 
+        // Detect OpenRouter usage
+        let openrouter_key = env::var("OPENROUTER_API_KEY").ok();
+        let use_openrouter = openrouter_key.is_some();
+        let openrouter_model = env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "google/gemini-2.5-pro-preview-06-05".to_string());
+
         Ok(GeminiClient {
             client,
             api_key,
             base_url,
+            use_openrouter,
+            openrouter_key,
+            openrouter_model,
             request_count: Arc::new(AtomicU32::new(0)),
             max_requests_per_session,
             max_prompt_length,
@@ -108,39 +123,71 @@ impl GeminiClient {
                 prompt.len(),
                 self.max_prompt_length);
         
-        let request_body = GeminiRequest {
-            contents: vec![Content {
-                parts: vec![Part {
-                    text: prompt.to_string(),
+        let response_text = if self.use_openrouter {
+            // Build OpenAI style JSON
+            let payload = json!({
+                "model": self.openrouter_model,
+                "messages": [{"role": "user", "content": prompt}],
+            });
+
+            let resp = self.client
+                .post("https://openrouter.ai/api/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", self.openrouter_key.as_ref().unwrap()))
+                .header("Content-Type", "application/json")
+                .json(&payload)
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let err = resp.text().await.unwrap_or_default();
+                return Err(format!("OpenRouter error {}: {}", status, err).into());
+            }
+
+            let val: serde_json::Value = resp.json().await?;
+            val["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string()
+        } else {
+            if self.api_key.as_deref().unwrap_or("").is_empty() {
+                return Err("GEMINI_API_KEY not set".into());
+            }
+
+            let request_body = GeminiRequest {
+                contents: vec![Content {
+                    parts: vec![Part {
+                        text: prompt.to_string(),
+                    }],
                 }],
-            }],
+            };
+
+            let resp = self
+                .client
+                .post(&self.base_url)
+                .query(&[("key", self.api_key.as_ref().unwrap())])
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let error_text = resp.text().await.unwrap_or_default();
+                return Err(format!("Gemini API error {}: {}", status, error_text).into());
+            }
+
+            let gemini_response: GeminiResponse = resp.json().await?;
+
+            if let Some(candidate) = gemini_response.candidates.first() {
+                if let Some(part) = candidate.content.parts.first() {
+                    part.text.clone()
+                } else { "".to_string() }
+            } else { "".to_string() }
         };
 
-        let response = self
-            .client
-            .post(&self.base_url)
-            .query(&[("key", &self.api_key)])
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(format!("Gemini API error {}: {}", status, error_text).into());
+        if response_text.is_empty() {
+            Err("Empty response text".into())
+        } else {
+            Ok(response_text)
         }
-
-        let gemini_response: GeminiResponse = response.json().await?;
-
-        // Extract the response text
-        if let Some(candidate) = gemini_response.candidates.first() {
-            if let Some(part) = candidate.content.parts.first() {
-                return Ok(part.text.clone());
-            }
-        }
-
-        Err("No response content found in Gemini API response".into())
     }
 
     /// Generate a code-focused response by adding context to the prompt
