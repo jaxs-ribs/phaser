@@ -6,6 +6,8 @@ description = "AI-First Coding Assistant (Rust Edition)"
 authors = ["Your Name <your.email@example.com>"]
 
 [dependencies]
+clap = { version = "4.4", features = ["derive"] }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread"] }
 
 [[bin]]
 name = "project-x"
