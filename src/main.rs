@@ -9,12 +9,12 @@ use project_x::hooks::autotest::TestExecutor;
 use std::time::Duration;
 use tokio;
 use std::env;
-use tempfile::{tempdir, TempDir};
-use std::path::{Path, PathBuf};
 use fs_extra;
 use std::process::Command;
 use std::fs;
 use std::error::Error;
+use chrono;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[clap(name = "project-x")]
@@ -52,39 +52,42 @@ struct Cli {
     #[clap(long)]
     skip_tests: bool,
 
-    /// Run in a temporary sandbox directory to avoid modifying project files
+    /// Run in a sandbox directory. Optionally provide a name, otherwise a timestamped one is created.
     #[clap(long)]
     sandbox: bool,
 
     /// If using --sandbox, keep the directory after completion for inspection
     #[clap(long)]
     keep_sandbox: bool,
+
+    /// Custom name for the sandbox directory, defaults to a timestamp.
+    #[clap(long)]
+    sandbox_name: Option<String>,
 }
 
 struct Sandbox {
-    _temp_dir: TempDir,
     path: PathBuf,
 }
 
 impl Sandbox {
-    fn new() -> Result<Self, Box<dyn Error>> {
-        let temp_dir = tempdir()?;
-        let path = temp_dir.path().to_path_buf();
-        println!("✨ Created sandbox directory at: {}", path.display());
+    fn new(name: Option<String>) -> Result<Self, Box<dyn Error>> {
+        let base_path = PathBuf::from("./sandboxes");
+        fs::create_dir_all(&base_path)?;
 
+        let sandbox_name = name.unwrap_or_else(|| {
+            chrono::Local::now().format("run_%Y-%m-%d_%H-%M-%S").to_string()
+        });
+        let path = base_path.join(sandbox_name);
+        
+        println!("✨ Creating sandbox directory at: {}", path.display());
         let mut copy_options = fs_extra::dir::CopyOptions::new();
         copy_options.copy_inside = true;
         fs_extra::dir::copy(".", &path, &copy_options)?;
         println!("🖨️  Copied project to sandbox.");
 
         Ok(Sandbox {
-            _temp_dir: temp_dir,
             path,
         })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
     }
 }
 
@@ -162,9 +165,9 @@ async fn run_autonomous_tdd_loop(
     gemini_client: &GeminiClient
 ) -> Result<(), Box<dyn std::error::Error>> {
     if cli.sandbox {
-        let sandbox = Sandbox::new()?;
+        let sandbox = Sandbox::new(cli.sandbox_name.clone())?;
         let original_dir = env::current_dir()?;
-        env::set_current_dir(sandbox.path())?;
+        env::set_current_dir(&sandbox.path)?;
 
         // Run the actual loop inside the sandbox
         let result = run_loop_logic(user_prompt, cli, gemini_client).await;
@@ -172,10 +175,11 @@ async fn run_autonomous_tdd_loop(
         // Return to original directory
         env::set_current_dir(original_dir)?;
 
-        if cli.keep_sandbox {
-            println!("✅ Sandbox retained at: {}", sandbox.path().display());
-            // To prevent the TempDir from being dropped and deleting the directory
-            std::mem::forget(sandbox);
+        if !cli.keep_sandbox {
+            println!("🗑️  Cleaning up sandbox directory...");
+            fs::remove_dir_all(&sandbox.path)?;
+        } else {
+            println!("✅ Sandbox retained at: {}", sandbox.path.display());
         }
         return result;
     }
