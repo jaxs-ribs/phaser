@@ -12,6 +12,8 @@ use std::env;
 use tempfile::{tempdir, TempDir};
 use std::path::PathBuf;
 use fs_extra;
+use std::process::Command;
+use std::fs;
 
 #[derive(Parser)]
 #[clap(name = "project-x")]
@@ -209,6 +211,19 @@ async fn run_loop_logic(
     for attempt in 1..=cli.max_retries {
         println!("\n🔄 === ATTEMPT {} of {} ===", attempt, cli.max_retries);
         
+        if attempt > 1 {
+            println!("\n🧹 Resetting sandbox to clean state...");
+            let git_clean = Command::new("git")
+                .args(&["clean", "-fdx"])
+                .output()?;
+            let git_reset = Command::new("git")
+                .args(&["reset", "--hard", "HEAD"])
+                .output()?;
+            if !git_clean.status.success() || !git_reset.status.success() {
+                println!("⚠️  Could not reset git state. Continuing with current state.");
+            }
+        }
+        
         // Step 1: Build Context - Read relevant files
         println!("📚 Step 1: Building context...");
         let context = context_builder.build_smart_context(user_prompt, ".", 3)?;
@@ -326,9 +341,42 @@ Generate the unified diff to accomplish the user request."#
         let patch_result = code_patcher.apply_and_verify(&sanitised_diff)?;
         
         if !patch_result.success {
-            println!("❌ Failed to apply patch: {:?}", patch_result.error);
-            memory.add_message(MessageRole::System, &format!("Patch application failed: {:?}", patch_result.error))?;
-            continue;
+            println!("❌ Patch failed after trying all strategies. Attempting whole-file replacement...");
+            
+            // Try to find the target file from the diff
+            if let Some(target_file) = parse_target_file_from_diff(&sanitised_diff) {
+                println!("🎯 Identified target file for overwrite: {}", target_file);
+                
+                // Read the file's current content for context
+                let file_content = fs::read_to_string(&target_file).unwrap_or_else(|_| "".to_string());
+                
+                let overwrite_prompt = format!(
+                    r#"
+You are a senior software engineer. Your previous attempt to create a diff failed.
+Your new task is to provide the COMPLETE, new content for the file `{}` to satisfy the original user request.
+Respond with ONLY the full, raw source code for the file. Do NOT use markdown or any explanations.
+
+Original User Request: "{}"
+
+Current content of `{}`:
+---
+{}
+---
+
+Provide the complete, corrected content for the file now."#,
+                    target_file, user_prompt, target_file, file_content
+                );
+                
+                println!("🤖 Generating full file content from LLM...");
+                let new_file_content = gemini_client.generate(&overwrite_prompt).await?;
+                
+                println!("💾 Overwriting file {} with new content ({} chars).", target_file, new_file_content.len());
+                fs::write(&target_file, new_file_content)?;
+                
+            } else {
+                println!("❌ Could not identify a target file from the failed diff. Skipping overwrite.");
+                continue; // Move to next attempt
+            }
         }
         
         println!("✅ Patch applied successfully!");
@@ -392,4 +440,19 @@ Generate the unified diff to accomplish the user request."#
     }
     
     Err("TDD loop failed to complete successfully".into())
+}
+
+fn parse_target_file_from_diff(diff: &str) -> Option<String> {
+    for line in diff.lines() {
+        if line.starts_with("--- ") {
+            // e.g., --- a/src/main.rs
+            let path = line.split_whitespace().nth(1)?;
+            if path.starts_with("a/") {
+                return Some(path[2..].to_string());
+            } else {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
 }
