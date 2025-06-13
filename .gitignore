@@ -12,6 +12,11 @@ Thumbs.db
 build/
 dist/
 out/
+/target/
+
+# Rust
+**/Cargo.lock
+*.rs.bk
 
 # Dependencies
 node_modules/
@@ -42,4 +47,10 @@ __pycache__/
 *.pyd
 .ruff_cache/
 .pytest_cache/
-.mypy_cache/ 
+.mypy_cache/
+
+# Project-specific
+*.db
+*.sqlite3
+/index/vecdb/
+/voice_recordings/
