@@ -1,0 +1,45 @@
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+build/
+dist/
+out/
+
+# Dependencies
+node_modules/
+vendor/
+
+# Logs
+*.log
+logs/
+
+# Secrets
+*.env
+.env.*
+!.env.example
+
+# Local configuration
+.local
+local.settings.json
+
+# OS-specific
+.AppleDouble
+.LSOverride
+
+# Cache files
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/ 
