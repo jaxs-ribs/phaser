@@ -6,6 +6,8 @@ description = "AI-First Coding Assistant (Rust Edition)"
 authors = ["Your Name <your.email@example.com>"]
 
 [dependencies]
+cpal = "0.15"
+hound = "3.5"
 
 [[bin]]
 name = "project-x"
