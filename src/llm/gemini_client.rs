@@ -60,6 +60,14 @@ impl GeminiClient {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let api_key = env::var("GEMINI_API_KEY").ok();
 
+        // Detect OpenRouter usage early (can work without Gemini API key)
+        let openrouter_key = env::var("OPENROUTER_API_KEY").ok();
+        let use_openrouter = openrouter_key.is_some();
+
+        if api_key.is_none() && !use_openrouter {
+            return Err("GEMINI_API_KEY environment variable not set".into());
+        }
+
         let client = Client::new();
 
         // Allow model override via env, default to Gemini 2.5 Pro
@@ -78,9 +86,6 @@ impl GeminiClient {
             .parse::<usize>()
             .unwrap_or(2000);
 
-        // Detect OpenRouter usage
-        let openrouter_key = env::var("OPENROUTER_API_KEY").ok();
-        let use_openrouter = openrouter_key.is_some();
         let openrouter_model = env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "google/gemini-2.5-pro-preview-06-05".to_string());
 
         Ok(GeminiClient {

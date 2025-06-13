@@ -187,22 +187,21 @@ impl TestExecutor {
         
         for line in output.lines() {
             if line.starts_with("test result:") {
-                // Example: "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
-                if let Some(results_part) = line.split("test result:").nth(1) {
-                    for part in results_part.split(';') {
-                        let part = part.trim();
-                        if part.contains("passed") {
-                            if let Some(num_str) = part.split_whitespace().next() {
-                                passed = num_str.parse().unwrap_or(0);
-                            }
-                        } else if part.contains("failed") {
-                            if let Some(num_str) = part.split_whitespace().next() {
-                                failed = num_str.parse().unwrap_or(0);
-                            }
-                        } else if part.contains("ignored") {
-                            if let Some(num_str) = part.split_whitespace().next() {
-                                ignored = num_str.parse().unwrap_or(0);
-                            }
+                // Example: "test result: ok. 5 passed; 2 failed; 1 ignored; 0 measured; 0 filtered out"
+                let parts: Vec<&str> = line.split(';').collect();
+                for part in parts {
+                    let trimmed = part.trim();
+                    if trimmed.contains("passed") {
+                        if let Some(num) = trimmed.split_whitespace().find_map(|tok| tok.parse::<usize>().ok()) {
+                            passed = num;
+                        }
+                    } else if trimmed.contains("failed") {
+                        if let Some(num) = trimmed.split_whitespace().find_map(|tok| tok.parse::<usize>().ok()) {
+                            failed = num;
+                        }
+                    } else if trimmed.contains("ignored") {
+                        if let Some(num) = trimmed.split_whitespace().find_map(|tok| tok.parse::<usize>().ok()) {
+                            ignored = num;
                         }
                     }
                 }
@@ -219,7 +218,7 @@ impl TestExecutor {
         let lines: Vec<&str> = output.lines().collect();
         
         for (i, line) in lines.iter().enumerate() {
-            if line.contains("FAILED") && line.contains("test ") {
+            if line.contains(" FAILED") && line.contains("test ") {
                 // Example: "test utils::git_client::tests::test_add_and_commit ... FAILED"
                 if let Some(test_name) = line.split("test ").nth(1) {
                     if let Some(name) = test_name.split(" ...").next() {
@@ -230,20 +229,22 @@ impl TestExecutor {
                         // Collect error details from following lines
                         for j in (i + 1)..std::cmp::min(i + 20, lines.len()) {
                             let error_line = lines[j];
-                            if error_line.starts_with("thread ") || error_line.starts_with("note:") {
-                                // Extract file location from panic messages
-                                if error_line.contains(" panicked at ") {
-                                    if let Some(location_part) = error_line.split(" panicked at ").nth(1) {
-                                        if let Some(location) = location_part.split(':').next() {
-                                            file_location = Some(location.to_string());
-                                        }
-                                    }
-                                }
-                                error_message.push_str(error_line);
-                                error_message.push('\n');
-                            } else if error_line.trim().is_empty() || error_line.starts_with("test ") {
+                            if error_line.starts_with("test ") {
                                 break;
                             }
+                            if error_line.trim().is_empty() {
+                                continue;
+                            }
+                            // Extract file location from panic messages
+                            if error_line.contains(" panicked at ") {
+                                if let Some(location_part) = error_line.split(" panicked at ").nth(1) {
+                                    if let Some(location) = location_part.split(':').next() {
+                                        file_location = Some(location.to_string());
+                                    }
+                                }
+                            }
+                            error_message.push_str(error_line);
+                            error_message.push('\n');
                         }
                         
                         failed_tests.push(FailedTest {
