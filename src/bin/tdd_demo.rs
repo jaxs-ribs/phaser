@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let lib_rs_content = context
         .files
         .iter()
-        .find(|f| f.path == "src/lib.rs")
+            .find(|f| f.path == "src/lib.rs")
         .map(|f| f.content.as_str())
         .unwrap_or("File not found");
 

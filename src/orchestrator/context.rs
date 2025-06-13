@@ -2,6 +2,28 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 use serde::{Serialize, Deserialize};
+use anyhow::Result;
+use grep::regex::RegexMatcher;
+use grep::searcher::{Searcher, Sink, SinkMatch};
+use std::collections::HashSet;
+use ignore::WalkBuilder;
+use std::io::Cursor;
+use std::process::Command;
+
+use super::{FileContext, ProjectContext};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectContext {
+    pub files: Vec<FileContext>,
+    pub total_line_count: usize,
+    pub total_char_count: usize,
+}
+
+impl ProjectContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileContext {
@@ -12,37 +34,74 @@ pub struct FileContext {
     pub exists: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildContext {
-    pub files: Vec<FileContext>,
-    pub total_lines: usize,
-    pub total_chars: usize,
-    pub total_files: usize,
-    pub context_summary: String,
-}
-
-pub struct ContextBuilder {
-    max_file_size: usize,
-    include_line_numbers: bool,
-}
+#[derive(Debug, Default)]
+pub struct ContextBuilder {}
 
 impl ContextBuilder {
-    /// Create a new ContextBuilder with default settings
     pub fn new() -> Self {
-        ContextBuilder {
-            max_file_size: 50_000, // 50KB max per file
-            include_line_numbers: true,
-        }
+        Self::default()
     }
-    
-    /// Create a ContextBuilder with custom settings
-    pub fn with_limits(max_file_size: usize, include_line_numbers: bool) -> Self {
-        ContextBuilder {
-            max_file_size,
-            include_line_numbers,
+
+    pub fn build_context_from_prompt(&self, prompt: &str) -> Result<ProjectContext> {
+        let keywords = self.extract_keywords(prompt);
+        if keywords.is_empty() {
+            return Ok(ProjectContext::new());
         }
+
+        let pattern = keywords.join("|");
+        let output = Command::new("rg")
+            .arg("--files-with-matches")
+            .arg("--iglob")
+            .arg("!.git")
+            .arg("-e")
+            .arg(&pattern)
+            .arg(".")
+            .output()?;
+
+        if !output.status.success() {
+            if output.status.code() != Some(1) {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow::anyhow!("ripgrep failed: {}", stderr));
+            }
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let files: HashSet<String> = stdout.lines().map(String::from).collect();
+
+        let mut file_contexts = Vec::new();
+        for file_path in files {
+            if let Ok(content) = fs::read_to_string(&file_path) {
+                file_contexts.push(FileContext {
+                    path: file_path,
+                    line_count: content.lines().count(),
+                    char_count: content.chars().count(),
+                    content,
+                    exists: true,
+                });
+            }
+        }
+
+        let total_line_count = file_contexts.iter().map(|f| f.line_count).sum();
+        let total_char_count = file_contexts.iter().map(|f| f.char_count).sum();
+
+        Ok(ProjectContext {
+            files: file_contexts,
+            total_line_count,
+            total_char_count,
+        })
     }
-    
+
+    fn extract_keywords(&self, prompt: &str) -> Vec<String> {
+        prompt
+            .split_whitespace()
+            .filter(|s| s.len() > 3 && (s.contains('.') || s.chars().any(|c| c.is_ascii_uppercase())))
+            .map(|s| {
+                s.trim_matches(|p: char| !p.is_alphanumeric() && p != '.')
+                    .to_string()
+            })
+            .collect()
+    }
+
     /// Build context from a list of file paths
     pub fn build_context(&self, file_paths: &[&str]) -> Result<BuildContext, Box<dyn Error>> {
         println!("🔍 Building context from {} files...", file_paths.len());
@@ -108,10 +167,10 @@ impl ContextBuilder {
         }
         
         let metadata = fs::metadata(path)?;
-        if metadata.len() > self.max_file_size as u64 {
+        if metadata.len() > 50_000 as u64 {
             return Ok(FileContext {
                 path: file_path.to_string(),
-                content: format!("File too large ({} bytes, max {})", metadata.len(), self.max_file_size),
+                content: format!("File too large ({} bytes, max 50KB)", metadata.len()),
                 line_count: 0,
                 char_count: 0,
                 exists: true,
@@ -122,29 +181,13 @@ impl ContextBuilder {
         let line_count = content.lines().count();
         let char_count = content.len();
         
-        let formatted_content = if self.include_line_numbers {
-            self.add_line_numbers(&content)
-        } else {
-            content
-        };
-        
         Ok(FileContext {
             path: file_path.to_string(),
-            content: formatted_content,
+            content,
             line_count,
             char_count,
             exists: true,
         })
-    }
-    
-    /// Add line numbers to content
-    fn add_line_numbers(&self, content: &str) -> String {
-        content
-            .lines()
-            .enumerate()
-            .map(|(i, line)| format!("{:4} | {}", i + 1, line))
-            .collect::<Vec<String>>()
-            .join("\n")
     }
     
     /// Format the context for LLM consumption
@@ -259,6 +302,22 @@ impl ContextBuilder {
 impl Default for ContextBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+struct FilePathSink<'a> {
+    files: &'a mut HashSet<String>,
+}
+
+impl<'a> Sink for FilePathSink<'a> {
+    type Error = std::io::Error;
+
+    fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch) -> Result<bool, Self::Error> {
+        let path_str = std::str::from_utf8(mat.path()).unwrap_or_default().to_string();
+        if !path_str.is_empty() {
+            self.files.insert(path_str);
+        }
+        Ok(true) // Continue searching
     }
 }
 

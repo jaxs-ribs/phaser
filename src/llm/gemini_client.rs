@@ -150,34 +150,34 @@ impl GeminiClient {
             if self.api_key.as_deref().unwrap_or("").is_empty() {
                 return Err("GEMINI_API_KEY not set".into());
             }
-
-            let request_body = GeminiRequest {
-                contents: vec![Content {
-                    parts: vec![Part {
-                        text: prompt.to_string(),
-                    }],
+        
+        let request_body = GeminiRequest {
+            contents: vec![Content {
+                parts: vec![Part {
+                    text: prompt.to_string(),
                 }],
-            };
+            }],
+        };
 
             let resp = self
-                .client
-                .post(&self.base_url)
+            .client
+            .post(&self.base_url)
                 .query(&[("key", self.api_key.as_ref().unwrap())])
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
-                .await?;
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
 
             if !resp.status().is_success() {
                 let status = resp.status();
                 let error_text = resp.text().await.unwrap_or_default();
-                return Err(format!("Gemini API error {}: {}", status, error_text).into());
-            }
+            return Err(format!("Gemini API error {}: {}", status, error_text).into());
+        }
 
             let gemini_response: GeminiResponse = resp.json().await?;
 
-            if let Some(candidate) = gemini_response.candidates.first() {
-                if let Some(part) = candidate.content.parts.first() {
+        if let Some(candidate) = gemini_response.candidates.first() {
+            if let Some(part) = candidate.content.parts.first() {
                     part.text.clone()
                 } else { "".to_string() }
             } else { "".to_string() }

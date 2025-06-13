@@ -292,7 +292,7 @@ Hunk #1 succeeded at 10 (offset 2 lines)."#;
 +modified content"#;
         
         let patcher = CodePatcher::with_options(true, false); // dry run
-        let result = patcher.apply_patch(diff).unwrap();
+        let _result = patcher.apply_patch(diff).unwrap();
         
         // File should not actually be modified in dry run
         let content = fs::read_to_string(&test_file).unwrap();

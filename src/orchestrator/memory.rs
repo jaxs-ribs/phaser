@@ -308,8 +308,7 @@ pub struct MemoryStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
-
+    
     #[test]
     fn test_memory_manager_creation() {
         let memory = MemoryManager::new_in_memory().unwrap();
